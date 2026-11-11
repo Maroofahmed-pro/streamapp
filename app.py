@@ -19,6 +19,8 @@ PAGE = """
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>STEDA Dashboard</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
 <style>
 :root{--bg:#f1f4f9;--card:#fff;--bd:#e5e8ee;--tx:#1a1d21;--mu:#6b7280;--ac:#2563eb;--ac2:#1d4ed8;--ok:#16a34a;--ok2:#15803d}
 *{box-sizing:border-box}
@@ -36,16 +38,19 @@ button:disabled{opacity:.6;cursor:default}
 #err{color:#dc2626;font-size:13px;margin-top:8px;min-height:16px}
 .filters{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}
 .filters2{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px}
-@media(max-width:700px){.filters,.filters2{grid-template-columns:1fr}}
+@media(max-width:700px){.filters,.filters2{grid-template-columns:minmax(0,1fr)}}
 .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
 .topbar h3{margin:0;font-size:17px}
 .info{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px}
+.export-actions{display:flex;gap:8px}
+.export-error{display:none;color:#dc2626;font-size:13px;margin:0 0 10px}
 .count-badge{display:inline-block;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;font-weight:700;font-size:14px;padding:7px 16px;border-radius:99px;box-shadow:0 2px 6px rgba(37,99,235,.3)}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:left;background:#f8fafc;color:#475569;padding:10px;white-space:nowrap;font-weight:600;border-bottom:2px solid var(--bd);position:sticky;top:0}
 td{padding:10px;border-top:1px solid #f0f1f4;white-space:nowrap}
 tbody tr:hover{background:#f8fafc}
-.tblwrap{overflow-x:auto;border:1px solid var(--bd);border-radius:10px;max-height:60vh;overflow-y:auto}
+.tblwrap{width:100%;max-width:100%;overflow:auto;border:1px solid var(--bd);border-radius:10px;max-height:60vh}
+table{min-width:900px}
 .pager{display:flex;justify-content:space-between;align-items:center;margin-top:14px}
 #pg{color:var(--mu);font-size:13px;font-weight:500}
 #dash{display:none}
@@ -58,6 +63,25 @@ tbody tr:hover{background:#f8fafc}
 .login-card p{color:var(--mu);margin:0 0 20px;font-size:13px}
 .login-card input{width:100%;margin-bottom:12px}
 .login-card button{width:100%;padding:11px}
+input,select{min-width:0;width:100%}
+@media(max-width:600px){
+  body{padding:10px}
+  .card{padding:14px;border-radius:12px}
+  .topbar{align-items:flex-start;gap:10px}
+  .topbar h3{font-size:16px}
+  .topbar button{flex-shrink:0}
+  .info{align-items:stretch}
+  .count-badge{text-align:center}
+  .info .export-actions{width:100%;flex-direction:column}
+  .info .ex{width:100%;min-height:44px}
+  .filters,.filters2{gap:8px}
+  .filters2{margin-top:8px}
+  .filters input,.filters select,.filters2 select{min-height:44px}
+  .pager{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  #pg{grid-column:1/-1;grid-row:1;text-align:center}
+  .pager button{min-height:44px}
+  .login-wrap{min-height:calc(100vh - 20px)}
+}
 </style></head><body>
 
 <div class="login-wrap" id="loginWrap">
@@ -98,7 +122,11 @@ tbody tr:hover{background:#f8fafc}
 
   <div class="card">
     <div class="info"><span class="count-badge" id="cnt">0 entries found</span>
-      <button class="ex" id="exBtn" onclick="exportExcel()">&#8595; Export Excel</button></div>
+      <div class="export-actions">
+        <button class="ex" id="exBtn" onclick="exportExcel()">&#8595; Export Excel</button>
+        <button id="pdfBtn" onclick="exportPDF()">&#8595; Export PDF</button>
+      </div></div>
+    <div class="export-error" id="exportErr" role="alert"></div>
     <div class="tblwrap"><table>
       <thead><tr><th>Project ID</th><th>Project Title</th><th>Entity</th><th>Level</th><th>Theme</th><th>School / Institution</th><th>Teacher</th><th>Tehsil</th><th>Status</th></tr></thead>
       <tbody id="tbody"></tbody>
@@ -146,23 +174,87 @@ async function loadData(p){
 function prevPage(){ if(page>1) loadData(page-1); }
 function nextPage(){ if(page<totalPages) loadData(page+1); }
 
-async function exportExcel(){
-  const btn=document.getElementById('exBtn'); btn.disabled=true;
+const exportColumns = [
+  { header:'Project ID', value:x=>x.ProjectID||'' },
+  { header:'Project Title', value:x=>x.ProjectTitle||'' },
+  { header:'Entity', value:x=>x.Entity||'' },
+  { header:'Level', value:x=>x.Level||'' },
+  { header:'Theme', value:x=>`${x.ThemeNo||''} - ${x.Theme||''}` },
+  { header:'School / Institution', value:x=>x.SchoolName||'' },
+  { header:'Teacher', value:x=>x.TeacherName||'' },
+  { header:'Tehsil', value:x=>x.Tehsil||'' },
+  { header:'Status', value:x=>x.isSubmitted?'Submitted':'Not submitted' }
+];
+
+async function getAllFilteredProjects(btn){
   let all=[], p=1, tp=1;
+  do{
+    btn.textContent = `Fetching page ${p}${tp>1?'/'+tp:''}...`;
+    const r = await fetch('/api/projects?'+filterParams(p,100));
+    if(!r.ok) throw new Error(`Could not fetch projects (HTTP ${r.status}).`);
+    const d = await r.json();
+    tp = d.TotalPages || 1;
+    all = all.concat(d.Projects||[]);
+    p++;
+  } while(p<=tp);
+  return all;
+}
+
+async function exportData(buttonId, defaultLabel, createFile){
+  const btn=document.getElementById(buttonId);
+  const error=document.getElementById('exportErr');
+  btn.disabled=true;
+  error.style.display='none';
+  error.textContent='';
   try{
-    do{
-      btn.textContent = `Fetching page ${p}${tp>1?'/'+tp:''}...`;
-      const r = await fetch('/api/projects?'+filterParams(p,100));
-      const d = await r.json();
-      tp = d.TotalPages || 1;
-      all = all.concat(d.Projects||[]);
-      p++;
-    } while(p<=tp);
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(all);
-    XLSX.utils.book_append_sheet(wb, ws, "Projects");
-    XLSX.writeFile(wb, "steda_projects.xlsx");
-  } finally { btn.disabled=false; btn.textContent='\u2193 Export Excel'; }
+    const all=await getAllFilteredProjects(btn);
+    createFile(all);
+  } catch(e) {
+    error.textContent=e.message || 'Export failed. Please try again.';
+    error.style.display='block';
+  } finally {
+    btn.disabled=false;
+    btn.textContent=defaultLabel;
+  }
+}
+
+function exportExcel(){
+  return exportData('exBtn','\u2193 Export Excel',all=>{
+    const headers=exportColumns.map(column=>column.header);
+    const rows=all.map(project=>exportColumns.map(column=>column.value(project)));
+    const ws=XLSX.utils.aoa_to_sheet([headers,...rows]);
+    ws['!autofilter']={ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:rows.length,c:headers.length-1}})};
+    ws['!cols']=[16,30,16,16,42,30,24,18,18].map(wch=>({wch}));
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,'Projects');
+    XLSX.writeFile(wb,'steda_projects.xlsx');
+  });
+}
+
+function exportPDF(){
+  return exportData('pdfBtn','\u2193 Export PDF',all=>{
+    if(!window.jspdf || !window.jspdf.jsPDF) throw new Error('PDF export library did not load. Please refresh and try again.');
+    const {jsPDF}=window.jspdf;
+    const pdfColumns=exportColumns.filter(column=>column.header!=='Teacher');
+    const doc=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
+    doc.setFontSize(14);
+    doc.text('Project Registration Details',9,12);
+    doc.autoTable({
+      startY:17,
+      head:[pdfColumns.map(column=>column.header)],
+      body:all.map(project=>pdfColumns.map(column=>column.value(project))),
+      margin:{left:9,right:9},
+      styles:{fontSize:7,cellPadding:2,overflow:'linebreak'},
+      headStyles:{fillColor:[37,99,235]},
+      columnStyles:{
+        0:{cellWidth:22},1:{cellWidth:38},2:{cellWidth:22},3:{cellWidth:18},
+        4:{cellWidth:48},5:{cellWidth:52},6:{cellWidth:25},7:{cellWidth:32}
+      },
+      horizontalPageBreak:true,
+      horizontalPageBreakRepeat:0
+    });
+    doc.save('steda_projects.pdf');
+  });
 }
 </script>
 </body></html>
