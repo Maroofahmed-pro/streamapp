@@ -146,17 +146,6 @@ async function loadData(p){
 function prevPage(){ if(page>1) loadData(page-1); }
 function nextPage(){ if(page<totalPages) loadData(page+1); }
 
-function activeFiltersSummary(){
-  const f = [
-    ["Search", document.getElementById('q').value],
-    ["Entity", document.getElementById('entity').value],
-    ["District", document.getElementById('district').selectedOptions[0].textContent],
-    ["Level", document.getElementById('level').value],
-    ["Theme", document.getElementById('theme').selectedOptions[0].textContent],
-    ["Status", document.getElementById('status').selectedOptions[0].textContent],
-  ];
-  return f.map(([k,v])=>({Filter:k, Value: v || "All"}));
-}
 async function exportExcel(){
   const btn=document.getElementById('exBtn'); btn.disabled=true;
   let all=[], p=1, tp=1;
@@ -170,12 +159,6 @@ async function exportExcel(){
       p++;
     } while(p<=tp);
     const wb = XLSX.utils.book_new();
-    const wsFilters = XLSX.utils.json_to_sheet([
-      {Filter:"Exported on", Value: new Date().toLocaleString()},
-      {Filter:"Total entries", Value: all.length},
-      ...activeFiltersSummary()
-    ]);
-    XLSX.utils.book_append_sheet(wb, wsFilters, "Filters Applied");
     const ws = XLSX.utils.json_to_sheet(all);
     XLSX.utils.book_append_sheet(wb, ws, "Projects");
     XLSX.writeFile(wb, "steda_projects.xlsx");
